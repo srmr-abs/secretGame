@@ -8,12 +8,13 @@ A local multiplayer mystery-game proof of concept. The existing Next.js and Reac
 
 | Area | Status |
 |---|---|
-| Existing Next.js App Router, visual design, player/admin screens, mystery themes, and visual assets | Preserved |
+| Existing Next.js App Router, visual design, player/admin screens, Detective Case theme, and visual assets | Preserved |
+| New-game theme choices | Limited to Detective Case and Zigzag Puzzle Hunt |
 | Bundled 55-puzzle bank | Retained and rewritten at easy difficulty across all five categories |
 | Supabase clients, queries, authentication, Realtime, packages, migrations, and cloud deployment config | Removed |
 | Local Express API and Socket.IO server | Implemented on port 4000 |
 | Rooms, PIN joining, player sessions, answers, clues, chat, results, and sequential teams | Implemented in memory; teams can start at 1 player and hold up to 10 |
-| Solo and flexible team puzzle ownership | Five puzzles are shared evenly; solo players receive all five, and larger teams can assist |
+| Solo and multiplayer modes | Solo players receive one easy riddle; multiplayer teams share five category puzzles and may have 1–10 players |
 | Two-helper assistance, private help-session state, visual puzzle authorization, and owner-only answers | Implemented |
 | Server-owned phase timers and admin pause/resume | Implemented |
 | Local admin password-hash login and signed session cookie | Implemented |
@@ -30,7 +31,7 @@ The migration was backed up before refactoring. This workspace did not contain a
 - **Backend:** Express, TypeScript, Socket.IO, and HTTP APIs at `http://localhost:4000`.
 - **API requests:** The Next.js `/api/*` rewrite forwards to Express. Existing screens continue using same-origin API paths; Socket.IO connects directly to the backend.
 - **State:** Maps and arrays in `server/src/storage/InMemoryStore.ts`. The backend is authoritative for rooms, identities, puzzles, answers, clues, assistance, timers, chat, and results.
-- **Puzzle content:** Local TypeScript seed data. The current bank has 55 easy puzzles, at least ten per category, and ten local SVG visual assets.
+- **Puzzle content:** Local TypeScript seed data. The local puzzle bank retains 55 easy puzzles, at least ten per category, and ten SVG visual assets. New games expose only the Detective Case and Zigzag Puzzle Hunt themes.
 - **Tests:** Vitest unit tests and Playwright browser tests.
 
 Socket updates carry room-safe change signals. Puzzle answers and puzzle-owner data are not broadcast to the team. Authorized players retrieve their own puzzle and accepted helpers retrieve shared puzzle details through server-validated state and image routes. Helpers can accept while solving their own puzzle; only the puzzle owner can submit an answer. Assistance does not pause timers and adds no penalty.
@@ -75,11 +76,11 @@ npm run dev:client
 ## Admin and multiplayer demonstration
 
 1. Sign in at `/admin/login` with the `ADMIN_EMAIL` and the original password used to generate `ADMIN_PASSWORD_HASH`.
-2. Create a game, choose a theme, and configure the number of teams. A team can start with one player and hold up to ten; choose one team for solo play or multiple teams for competition. The default phase lengths are five, three, and four minutes.
+2. Create a game, choose Detective Case or Zigzag Puzzle Hunt, then choose Single Player or Multiplayer. Solo mode creates one player and one easy riddle. Multiplayer lets you set team count and capacity from 1 to 10; each team can start with one player. For one player on each side, choose two teams with capacity one. Multiplayer phase defaults are five, three, and four minutes.
 3. Share the six-digit PIN. Open the frontend in separate tabs, incognito windows, or browser profiles and join with distinct display names. Players are balanced across the configured teams, and the host can start as soon as every team has at least one player.
-4. Start the session once. Teams activate in sequence. Every team receives five distinct category puzzles; ownership is distributed as evenly as possible, so a solo player owns all five and teammates can each own multiple puzzles. Teams larger than five can support puzzle owners through help requests, chat, and coordination.
+4. Start the session once. Multiplayer teams activate in sequence and receive five distinct category puzzles, distributed across their players. In Solo mode, the player gets one easy riddle and one clue, then proceeds directly to the final secret word.
 5. Players submit their own answers, share clues and team-chat messages, and may request help. Any connected teammate can accept while working on their own puzzle. The accepted helper receives the question and, for visual puzzles, the original authorized image in a separate help panel.
-6. Once all five clues are unlocked, collaborate and submit the final secret word. Results record completion, raw and adjusted times, penalties, hints, incorrect final attempts, and assistance statistics.
+6. Solo mode opens the final answer after its one clue is unlocked. Multiplayer opens it as soon as all five clues are unlocked, during the collaboration phase. Results record completion, raw and adjusted times, penalties, hints, incorrect final attempts, and assistance statistics.
 
 Use the admin control room for live team/player status, team order, pause/resume, and results. The game supports multiple browser sessions on one development machine.
 
@@ -99,9 +100,9 @@ Admin credentials are verified on the backend. Admin and player sessions use Htt
 
 ## Game rules and timers
 
-- Individual puzzles: five minutes by default.
-- Collaboration: three minutes by default.
-- Final secret-word phase: four minutes by default.
+- Multiplayer individual puzzles: five minutes by default.
+- Multiplayer collaboration: three minutes by default.
+- Final secret-word phase: four minutes by default. Solo mode skips team collaboration and proceeds directly from its riddle to the final answer. The final-answer form appears as soon as all required clues are unlocked, even while the multiplayer collaboration timer is still running.
 - Puzzle hints add fifteen seconds each; an incorrect final answer adds ten seconds; assistance adds zero seconds.
 - A maximum of three incorrect final answers is allowed.
 - The backend controls deadlines, automatic phase transitions, session pause/resume, team sequencing, and result calculations. The browser only renders the server deadline and reconnects to current state.

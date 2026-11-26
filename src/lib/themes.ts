@@ -2,9 +2,13 @@ import { puzzleCategories } from './game-types';
 export { puzzleCategories };
 export type { PuzzleCategory } from './game-types';
 export const themes = [
-  { id: 'detective', title: 'Detective Case', symbol: '⌕', intro: 'A priceless evidence file has vanished from the city archives. Five witnesses left fragments of the truth. Reconstruct the evidence before the trail goes cold.', success: 'Case closed. Your team followed every clue and uncovered the truth.', timeout: 'The trail has gone cold. The case file will remain sealed until the competition ends.', words: [
-    { word: 'SHADOW', clues: { logical: 'It follows you, but never speaks.', riddle: 'It grows long at sunset and disappears in darkness.', visual: 'Look for the dark shape cast when light is blocked.', mathematical: 'Six letters: the first is the 19th letter of the alphabet.', word: 'Remove the first letter of “window” and rearrange to find a dark outline: SHADOW.' } },
-    { word: 'LANTERN', clues: { logical: 'It carries its own light into dark places.', riddle: 'I have a handle and a glow, but no flame is required.', visual: 'The object pictured belongs in a detective’s night kit.', mathematical: 'Seven letters; it begins with L and ends with N.', word: 'A portable light used to search a dark scene.' } }
+  { id: 'detective', title: 'Detective Case', symbol: '⌕', intro: 'A priceless evidence file has vanished from the city archives. Follow the clues to discover the secret word before the trail goes cold.', success: 'Case closed. You followed every clue and uncovered the truth.', timeout: 'The trail has gone cold. The case file will remain sealed until the competition ends.', words: [
+    { word: 'SHADOW', clues: { logical: 'It follows you, but never speaks.', riddle: 'It grows long at sunset and disappears in darkness.', visual: 'Look for the dark shape cast when light is blocked.', mathematical: 'Six letters; it starts with S.', word: 'A dark shape made when light is blocked.' } },
+    { word: 'LANTERN', clues: { logical: 'It carries its own light into dark places.', riddle: 'It is a lamp you can carry by its handle.', visual: 'The object pictured belongs in a detective’s night kit.', mathematical: 'Seven letters; it starts with L.', word: 'A portable light used to search a dark scene.' } }
+  ] },
+  { id: 'zigzag', title: 'Zigzag Puzzle Hunt', symbol: '↯', intro: 'Follow a winding trail of easy riddles and clues. Find the hidden word before the path closes.', success: 'Trail complete! You followed the zigzags and found the secret word.', timeout: 'The trail has closed. Start a new hunt to try again.', words: [
+    { word: 'ARROW', clues: { logical: 'It points you in the direction to go.', riddle: 'It has a pointed head and shows which way to travel.', visual: 'Follow the bent line that points to the next step.', mathematical: 'Five letters; it starts with A.', word: 'A sign with a point that shows direction.' } },
+    { word: 'MAZE', clues: { logical: 'It has many paths and some dead ends.', riddle: 'Find your way through my winding paths to reach the exit.', visual: 'Follow the zigzag path from start to finish.', mathematical: 'Four letters; it starts with M.', word: 'A puzzle made of paths with one way out.' } }
   ] },
   { id: 'treasure', title: 'Treasure Hunt', symbol: '◇', intro: 'An explorer’s map was torn into five coded fragments. Follow the crew’s clues to discover where the treasure is hidden.', success: 'Treasure found. The whole crew earned the prize.', timeout: 'The tide has turned and the treasure remains hidden. Keep your map safe.', words: [
     { word: 'ISLAND', clues: { logical: 'It is land surrounded entirely by water.', riddle: 'I am a shore all the way around, but no mainland.', visual: 'The map marks a piece of land separated by blue water.', mathematical: 'Six letters; it starts with I and ends with D.', word: 'A small piece of land surrounded by water.' } },
@@ -28,5 +32,6 @@ export const themes = [
   ] }
 ] as const;
 export type ThemeId = (typeof themes)[number]['id'];
+export const availableThemeIds = ['detective', 'zigzag'] as const;
 export function themeById(id: string) { return themes.find((theme) => theme.id === id) ?? themes[0]; }
 export function normalizeAnswer(answer: string) { return answer.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, ''); }

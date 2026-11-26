@@ -37,6 +37,11 @@ test('five-player local game supports simultaneous own-puzzle solving and privat
     const adminWebSocket = admin.waitForEvent('websocket', { timeout: 10000 });
     await admin.goto(`/admin/session/${game.id}`);
     await adminWebSocket;
+    await expect(admin.locator('.pin-share-code')).toHaveText(game.pin);
+    await adminContext.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+    await admin.getByRole('button', { name: /copy game pin/i }).click();
+    await expect(admin.getByRole('button', { name: /copied/i })).toBeVisible();
+    expect(await admin.evaluate(() => navigator.clipboard.readText())).toBe(game.pin);
     await expect(admin.getByRole('heading', { name: /team order & player status/i })).toBeVisible();
 
     await Promise.all(contexts.map(async (context, index) => {
@@ -130,7 +135,11 @@ test('five-player local game supports simultaneous own-puzzle solving and privat
     await expect.poll(async () => {
       const control = await (await adminContext.request.get(`${base}/api/admin/session/${game.id}`)).json();
       return control.teams.find((team: { id: string }) => team.id === owner.team.id)?.phase;
-    }, { timeout: 80_000, intervals: [1000] }).toBe('final_answer');
+    }, { timeout: 10_000, intervals: [500] }).toBe('collaboration');
+    await expect(pages[ownerIndex].getByText(/FINAL SECRET WORD/)).toBeVisible({ timeout: 5000 });
+    await pages[ownerIndex].getByPlaceholder('Enter the secret word').fill('wrong-word');
+    await pages[ownerIndex].getByRole('button', { name: 'Unlock' }).click();
+    await expect(pages[ownerIndex].locator('.final-feedback')).toContainText('FINAL ANSWER NOT CORRECT');
     const finalState = await (await contexts[ownerIndex].request.get(`${base}/api/game/state`)).json();
     expect(finalState.team.clues.filter((clue: { completed: boolean }) => clue.completed)).toHaveLength(5);
     const mathClue = finalState.team.clues.find((clue: { category: string }) => clue.category === 'mathematical').clue as string;

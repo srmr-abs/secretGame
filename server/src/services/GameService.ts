@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { normalizeAnswer, puzzleCategories, themeById, themes } from '../../../src/lib/themes';
+import { availableThemeIds, normalizeAnswer, puzzleCategories, themeById } from '../../../src/lib/themes';
 import { adjustedSeconds, rankTeams } from '../../../src/lib/scoring';
 import { InMemoryStore, store as defaultStore } from '../storage/InMemoryStore';
 import type { CreateGameInput, GamePhase, GameSession, HelpRequest, Player, PublicPuzzle, Puzzle, PuzzleAssignment, Team, TeamResult, UploadedImage } from '../types/game.types';
@@ -51,8 +51,13 @@ export class GameService {
   createSession(input: CreateGameInput) {
     const name = String(input.name ?? '').trim();
     if (name.length < 2 || name.length > 80) throw new HttpError(400, 'Game name must be 2 to 80 characters.');
-    if (!themes.some((theme) => theme.id === input.theme)) throw new HttpError(400, 'Choose a valid mystery theme.');
-    if (!Number.isInteger(input.numberOfTeams) || input.numberOfTeams < 1 || input.numberOfTeams > 20) throw new HttpError(400, 'Choose between 1 and 20 teams.');
+    if (!availableThemeIds.includes(input.theme as typeof availableThemeIds[number])) throw new HttpError(400, 'Choose Detective Case or Zigzag Puzzle Hunt.');
+    const gameMode = input.gameMode === 'solo' ? 'solo' : 'multiplayer';
+    if (input.gameMode && !['solo', 'multiplayer'].includes(input.gameMode)) throw new HttpError(400, 'Choose solo or multiplayer mode.');
+    const numberOfTeams = gameMode === 'solo' ? 1 : input.numberOfTeams;
+    if (!Number.isInteger(numberOfTeams) || numberOfTeams < 1 || numberOfTeams > 20) throw new HttpError(400, 'Choose between 1 and 20 teams.');
+    const playersPerTeam = gameMode === 'solo' ? 1 : input.playersPerTeam ?? 10;
+    if (!Number.isInteger(playersPerTeam) || playersPerTeam < 1 || playersPerTeam > 10) throw new HttpError(400, 'Each team capacity must be between 1 and 10 players.');
     const durations = [input.puzzleMinutes, input.collaborationMinutes, input.finalMinutes];
     if (!durations.every((duration) => Number.isInteger(duration) && duration >= 1 && duration <= 30)) throw new HttpError(400, 'Each phase timer must be from 1 to 30 minutes.');
     const theme = themeById(input.theme);
@@ -60,13 +65,13 @@ export class GameService {
     do { pin = String(randomInt(0, 1_000_000)).padStart(6, '0'); } while ([...this.data.sessions.values()].some((session) => session.pin === pin));
     const now = iso(this.now());
     const session: GameSession = {
-      id: randomUUID(), name, pin, theme: input.theme, status: 'waiting_for_players', team_count: input.numberOfTeams,
-      puzzle_seconds: input.puzzleMinutes * 60, collaboration_seconds: input.collaborationMinutes * 60,
+      id: randomUUID(), name, pin, theme: input.theme, game_mode: gameMode, status: 'waiting_for_players', team_count: numberOfTeams,
+      players_per_team: playersPerTeam, puzzle_seconds: input.puzzleMinutes * 60, collaboration_seconds: input.collaborationMinutes * 60,
       final_seconds: input.finalMinutes * 60, hints_enabled: input.hintsEnabled !== false, surprise_events: input.surpriseEvents === true,
       current_team_index: -1, started_at: null, completed_at: null, paused_at: null, paused_seconds: 0, remaining_time_before_pause: null, created_at: now
     };
     this.data.sessions.set(session.id, session);
-    for (let i = 0; i < input.numberOfTeams; i++) {
+    for (let i = 0; i < numberOfTeams; i++) {
       const team: Team = {
         id: randomUUID(), session_id: session.id, name: `Team ${String.fromCharCode(65 + (i % 26))}${i >= 26 ? ` ${Math.floor(i / 26) + 1}` : ''}`,
         play_order: i + 1, status: 'waiting', phase: 'waiting', secret_word: theme.words[randomInt(0, theme.words.length)].word,
@@ -87,9 +92,9 @@ export class GameService {
     const session = [...this.data.sessions.values()].find((entry) => entry.pin === pin);
     if (!session || !['waiting_for_players', 'ready'].includes(session.status)) throw new HttpError(400, 'Game PIN is invalid or the game has already started.');
     const teams = [...this.data.teams.values()].filter((team) => team.session_id === session.id).sort((a, b) => a.play_order - b.play_order);
-    const team = teams.filter((candidate) => candidate.status === 'waiting' && this.countTeamPlayers(candidate.id) < 10)
+    const team = teams.filter((candidate) => candidate.status === 'waiting' && this.countTeamPlayers(candidate.id) < session.players_per_team)
       .sort((a, b) => this.countTeamPlayers(a.id) - this.countTeamPlayers(b.id) || a.play_order - b.play_order)[0];
-    if (!team) throw new HttpError(409, 'All teams have reached the 10-player limit.');
+    if (!team) throw new HttpError(409, `All teams have reached their ${session.players_per_team}-player capacity.`);
     const sessionTeamIds = new Set(teams.map((candidate) => candidate.id));
     if ([...this.data.players.values()].some((player) => sessionTeamIds.has(player.team_id) && player.display_name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new HttpError(409, 'That name is already used in this game.');
     const token = randomBytes(32).toString('base64url');
@@ -137,14 +142,17 @@ export class GameService {
     if (!team) throw new HttpError(404, 'Team not found.');
     const players = this.teamPlayers(teamId);
     if (players.length < 1 || players.length > 10) return false;
+    const session = this.sessionForTeam(team);
+    const categories = session?.game_mode === 'solo' ? ['riddle'] as const : shuffle([...puzzleCategories]);
+    const expectedAssignments = categories.length;
     const existing = this.teamAssignments(teamId);
-    if (existing.length === 5) return true;
+    if (existing.length === expectedAssignments) return true;
     for (const assignment of existing) this.data.assignments.delete(assignment.id);
-    const theme = themeById(this.sessionForTeam(team)?.theme ?? 'detective');
+    const theme = themeById(session?.theme ?? 'detective');
     const mission = theme.words.find((entry) => entry.word === team.secret_word);
     if (!mission) throw new HttpError(500, 'The selected theme is missing its clue set.');
     const assignedIds = new Set<string>();
-    for (const [index, category] of shuffle([...puzzleCategories]).entries()) {
+    for (const [index, category] of categories.entries()) {
       const pool = shuffle([...this.data.puzzles.values()].filter((puzzle) => puzzle.active && puzzle.category === category && !assignedIds.has(puzzle.id)));
       if (!pool.length) throw new HttpError(500, `No active ${category} puzzles are available.`);
       const puzzle = pool[0];
@@ -162,9 +170,10 @@ export class GameService {
     const session = this.data.sessions.get(sessionId);
     if (!session || !['ready', 'waiting_for_players'].includes(session.status)) throw new HttpError(409, 'Session cannot be started.');
     const teams = [...this.data.teams.values()].filter((team) => team.session_id === session.id).sort((a, b) => a.play_order - b.play_order);
-    if (teams.length !== session.team_count || teams.some((team) => this.countTeamPlayers(team.id) < 1 || this.countTeamPlayers(team.id) > 10)) throw new HttpError(409, 'Every team needs at least one player and can have no more than ten.');
+    if (teams.length !== session.team_count || teams.some((team) => this.countTeamPlayers(team.id) < 1 || this.countTeamPlayers(team.id) > session.players_per_team)) throw new HttpError(409, `Every team needs at least one player and can have no more than ${session.players_per_team}.`);
     for (const team of teams) this.assignPuzzles(team.id);
-    if (teams.some((team) => this.teamAssignments(team.id).length !== 5)) throw new HttpError(409, 'Puzzle assignments are not ready.');
+    const expectedAssignments = session.game_mode === 'solo' ? 1 : 5;
+    if (teams.some((team) => this.teamAssignments(team.id).length !== expectedAssignments)) throw new HttpError(409, 'Puzzle assignments are not ready.');
     const now = this.now();
     session.status = 'running';
     session.started_at = iso(now);
@@ -270,8 +279,9 @@ export class GameService {
     if (!answer || answer.length > 100) throw new HttpError(400, 'Enter a short secret word.');
     const team = this.requireTeam(player.team_id);
     const session = this.sessionForTeam(team);
-    if (!player.mission_accepted_at || !session || team.status !== 'active' || team.phase !== 'final_answer' || session.status !== 'running' || session.paused_at || !team.phase_ends_at || Date.parse(team.phase_ends_at) <= this.now()) throw new HttpError(409, 'The final answer is not currently available.');
-    if (this.teamAssignments(team.id).filter((assignment) => assignment.completed_at).length !== 5) throw new HttpError(409, 'All five clues must be unlocked first.');
+    if (!player.mission_accepted_at || !session || team.status !== 'active' || !['collaboration', 'final_answer'].includes(team.phase) || session.status !== 'running' || session.paused_at || !team.phase_ends_at || Date.parse(team.phase_ends_at) <= this.now()) throw new HttpError(409, 'The final answer is not currently available.');
+    const requiredClues = session.game_mode === 'solo' ? 1 : 5;
+    if (this.teamAssignments(team.id).filter((assignment) => assignment.completed_at).length !== requiredClues) throw new HttpError(409, `Unlock all ${requiredClues} clue${requiredClues === 1 ? '' : 's'} first.`);
     if (team.incorrect_final_attempts >= 3) throw new HttpError(409, 'No final answer attempts remain.');
     team.final_attempts += 1;
     const correct = normalizeAnswer(answer) === normalizeAnswer(team.secret_word);
@@ -285,7 +295,7 @@ export class GameService {
     }
     this.notify(team.id, correct ? 'team-completed' : 'final-attempt');
     if (team.status === 'completed' || team.status === 'failed') this.finishTeam(team);
-    return { correct, attemptsRemaining: Math.max(0, 3 - team.incorrect_final_attempts), feedback: correct ? 'The secret is unlocked. Mission complete.' : 'Not the secret word. Bring all five clues together.' };
+    return { correct, attemptsRemaining: Math.max(0, 3 - team.incorrect_final_attempts), feedback: correct ? 'The secret is unlocked. Mission complete.' : session.game_mode === 'solo' ? 'Not the secret word. Review your clue and try again.' : 'Not the secret word. Bring the clues together and try again.' };
   }
 
   createHelpRequest(playerId: string, assignmentId: string, messageValue: unknown) {
@@ -463,7 +473,7 @@ export class GameService {
       phase_started_at: team.phase_started_at, phase_ends_at: team.phase_ends_at, activated_at: team.activated_at,
       completed_at: team.completed_at, session_id: team.session_id, incorrect_final_attempts: team.incorrect_final_attempts,
       penalty_seconds: team.penalty_seconds, hints_used: team.hints_used, queuePosition: team.play_order,
-      players: Array.from({ length: 10 }, (_, index) => {
+      players: Array.from({ length: session.players_per_team }, (_, index) => {
         const entry = players[index];
         return entry ? { id: entry.id, name: entry.display_name, connected: entry.connected, acceptedMission: Boolean(entry.mission_accepted_at) } : null;
       }), clues, remainingSeconds: team.phase_ends_at ? Math.max(0, Math.ceil((Date.parse(team.phase_ends_at) - this.now()) / 1000)) : null
@@ -476,8 +486,8 @@ export class GameService {
     return {
       serverNow: this.now(), player: { id: player.id, name: player.display_name, acceptedMission: Boolean(player.mission_accepted_at) },
       session: {
-        id: session.id, name: session.name, pin: session.pin, theme: session.theme, status: session.status, team_count: session.team_count,
-        puzzle_seconds: session.puzzle_seconds, collaboration_seconds: session.collaboration_seconds, final_seconds: session.final_seconds,
+        id: session.id, name: session.name, pin: session.pin, theme: session.theme, game_mode: session.game_mode, status: session.status, team_count: session.team_count,
+        players_per_team: session.players_per_team, puzzle_seconds: session.puzzle_seconds, collaboration_seconds: session.collaboration_seconds, final_seconds: session.final_seconds,
         hints_enabled: session.hints_enabled, surprise_events: session.surprise_events, started_at: session.started_at,
         completed_at: session.completed_at, paused_at: session.paused_at, paused: Boolean(session.paused_at),
         themeInfo: { id: theme.id, title: theme.title, symbol: theme.symbol, intro: theme.intro, success: theme.success, timeout: theme.timeout }
@@ -497,8 +507,8 @@ export class GameService {
       const teams = [...this.data.teams.values()].filter((team) => team.session_id === session.id).sort((a, b) => a.play_order - b.play_order)
         .map((team) => ({ id: team.id, name: team.name, status: team.status, phase: team.phase }));
       const playerCount = teams.reduce((count, team) => count + this.countTeamPlayers(team.id), 0);
-      return { id: session.id, name: session.name, pin: session.pin, theme: session.theme, status: session.status,
-        team_count: session.team_count, created_at: session.created_at, teams, playerCount };
+      return { id: session.id, name: session.name, pin: session.pin, theme: session.theme, game_mode: session.game_mode, status: session.status,
+        team_count: session.team_count, players_per_team: session.players_per_team, created_at: session.created_at, teams, playerCount };
     });
     return {
       sessions,
@@ -590,7 +600,7 @@ export class GameService {
       const target = this.data.teams.get(String(input.targetTeamId ?? ''));
       const source = player ? this.data.teams.get(player.team_id) : undefined;
       if (!player || !source || !target || source.session_id !== session.id || target.session_id !== session.id || source.id === target.id) throw new HttpError(409, 'Choose a valid player and destination team.');
-      if (this.countTeamPlayers(target.id) >= 10) throw new HttpError(409, 'That team has reached the 10-player limit.');
+      if (this.countTeamPlayers(target.id) >= session.players_per_team) throw new HttpError(409, `That team has reached its ${session.players_per_team}-player limit.`);
       if (this.teamPlayers(target.id).some((entry) => entry.display_name.toLocaleLowerCase() === player.display_name.toLocaleLowerCase())) throw new HttpError(409, 'That name already exists on the destination team.');
       for (const team of [source, target]) for (const assignment of this.teamAssignments(team.id)) this.data.assignments.delete(assignment.id);
       player.team_id = target.id; source.status = 'waiting'; target.status = 'waiting';
@@ -674,11 +684,14 @@ export class GameService {
     const now = this.now();
     if (team.phase === 'completed' || team.phase === 'failed') { this.finishTeam(team); return; }
     if (team.phase === 'puzzles') {
-      if (this.teamAssignments(team.id).length === 5 && this.teamAssignments(team.id).every((assignment) => assignment.completed_at)) {
-        this.startPhase(team, 'collaboration', session.collaboration_seconds, now);
+      const puzzleCount = session.game_mode === 'solo' ? 1 : 5;
+      if (this.teamAssignments(team.id).length === puzzleCount && this.teamAssignments(team.id).every((assignment) => assignment.completed_at)) {
+        const nextPhase = session.game_mode === 'solo' ? 'final_answer' : 'collaboration';
+        const nextDuration = session.game_mode === 'solo' ? session.final_seconds : session.collaboration_seconds;
+        this.startPhase(team, nextPhase, nextDuration, now);
         this.closeRequestsForTeam(team.id, 'completed');
         this.notify(team.id, 'phase-changed');
-        this.event(session.id, team.id, null, 'collaboration_started');
+        this.event(session.id, team.id, null, session.game_mode === 'solo' ? 'final_answer_started' : 'collaboration_started');
         return;
       }
       if (team.phase_ends_at && Date.parse(team.phase_ends_at) <= now) {

@@ -27,44 +27,43 @@ beforeEach(() => {
 
 describe('local room and puzzle behavior', () => {
   it('validates PINs, prevents duplicate names, fills capacity, and restores the existing token session', () => {
-    const session = game.createSession({ name: 'Room test', theme: 'treasure', numberOfTeams: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+    const session = game.createSession({ name: 'Room test', theme: 'zigzag', numberOfTeams: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
     expect(() => game.join('bad', 'One')).toThrow(/six-digit/i);
     const first = game.join(session.pin, 'Player One');
     expect(() => game.join(session.pin, 'player one')).toThrow(/already used/i);
     for (let i = 2; i <= 10; i++) game.join(session.pin, `Player ${i}`);
-    expect(() => game.join(session.pin, 'Eleventh Player')).toThrow(/10-player limit/i);
+    expect(() => game.join(session.pin, 'Eleventh Player')).toThrow(/10-player capacity/i);
     const player = [...game.data.players.values()][0];
     expect(game.getPlayerByToken(first.token)?.id).toBe(player.id);
     expect(game.adminDashboard().sessions[0].playerCount).toBe(10);
   });
 
-  it('allows a solo player to start and receive all five puzzles', () => {
-    const session = game.createSession({ name: 'Solo run', theme: 'detective', numberOfTeams: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+  it('allows a solo player to solve one easy riddle and submit the secret word', () => {
+    const session = game.createSession({ name: 'Solo run', theme: 'detective', gameMode: 'solo', numberOfTeams: 1, playersPerTeam: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
     const joined = game.join(session.pin, 'Solo Detective');
     expect(game.data.sessions.get(session.id)?.status).toBe('ready');
     game.startSession(session.id);
     game.acceptMission(joined.player.id);
     const state = game.stateForPlayer(joined.player.id);
-    expect(state.puzzles).toHaveLength(5);
-    expect(state.puzzles.map((puzzle) => puzzle.details.category).sort()).toEqual(['logical', 'mathematical', 'riddle', 'visual', 'word']);
+    expect(state.puzzles).toHaveLength(1);
+    expect(state.puzzles[0].details.category).toBe('riddle');
     expect([...game.data.assignments.values()].every((assignment) => assignment.player_id === joined.player.id)).toBe(true);
     for (const assignment of state.puzzles) {
       const puzzle = game.data.puzzles.get(assignment.details.id)!;
       expect(game.submitPuzzleAnswer(joined.player.id, assignment.id, puzzle.correct_answer).correct).toBe(true);
     }
-    expect(game.data.teams.get(joined.team.id)?.phase).toBe('collaboration');
-    now += 3 * 60_000;
-    game.tickAll();
+    expect(game.data.teams.get(joined.team.id)?.phase).toBe('final_answer');
     expect(game.submitFinalAnswer(joined.player.id, joined.team.secret_word).correct).toBe(true);
     expect(game.data.sessions.get(session.id)?.status).toBe('completed');
   });
 
   it('balances one player into each team and allows both teams to start', () => {
-    const session = game.createSession({ name: 'One each', theme: 'treasure', numberOfTeams: 2, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+    const session = game.createSession({ name: 'One each', theme: 'zigzag', numberOfTeams: 2, playersPerTeam: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
     const first = game.join(session.pin, 'Team A player');
     const second = game.join(session.pin, 'Team B player');
     expect(first.team.id).not.toBe(second.team.id);
     expect(game.data.sessions.get(session.id)?.status).toBe('ready');
+    expect(() => game.join(session.pin, 'Unexpected third player')).toThrow(/1-player capacity/i);
     game.startSession(session.id);
     expect([...game.data.teams.values()].filter((team) => team.session_id === session.id).map((team) => team.status)).toEqual(['active', 'waiting']);
     expect([...game.data.assignments.values()].filter((assignment) => assignment.team_id === first.team.id)).toHaveLength(5);
@@ -164,6 +163,18 @@ describe('server-controlled phases and scoring', () => {
     expect(stored.penalty_seconds).toBe(0);
   });
 
+  it('accepts the final secret immediately when all five clues unlock during collaboration', () => {
+    const room = createOneTeam();
+    game.startSession(room.id);
+    room.players.forEach((player) => game.acceptMission(player.id));
+    for (const player of room.players) solve(player.id);
+    expect(game.data.teams.get(room.team.id)?.phase).toBe('collaboration');
+    const playerState = game.stateForPlayer(room.players[0].id);
+    expect(playerState.team.clues.every((clue: { completed: boolean }) => clue.completed)).toBe(true);
+    expect(game.submitFinalAnswer(room.players[0].id, room.team.secret_word).correct).toBe(true);
+    expect(game.data.sessions.get(room.id)?.status).toBe('completed');
+  });
+
   it('applies hint and incorrect-final penalties, caps hints, and fails after three incorrect secrets', () => {
     const room = createOneTeam();
     game.startSession(room.id);
@@ -188,7 +199,7 @@ describe('server-controlled phases and scoring', () => {
   });
 
   it('activates teams in sequence and ranks every successful team above failed teams', () => {
-    const session = game.createSession({ name: 'Sequence QA', theme: 'office', numberOfTeams: 2, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+    const session = game.createSession({ name: 'Sequence QA', theme: 'zigzag', numberOfTeams: 2, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
     const joined = Array.from({ length: 10 }, (_, index) => game.join(session.pin, `Competitor ${index + 1}`));
     const teams = [...game.data.teams.values()].filter((team) => team.session_id === session.id).sort((a, b) => a.play_order - b.play_order);
     const firstTeam = joined.filter((entry) => entry.team.id === teams[0].id).map((entry) => entry.player);

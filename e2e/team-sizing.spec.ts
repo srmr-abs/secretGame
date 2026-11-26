@@ -19,7 +19,7 @@ test('solo players and one-player competing teams can start', async ({ browser }
     await expect(admin).toHaveURL(/\/admin$/);
 
     const soloGameResponse = await adminContext.request.post(`${base}/api/admin`, { data: {
-      name: `Solo QA ${Date.now()}`, theme: 'detective', numberOfTeams: 1,
+      name: `Solo QA ${Date.now()}`, theme: 'detective', gameMode: 'solo', numberOfTeams: 1, playersPerTeam: 1,
       puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4
     } });
     expect(soloGameResponse.ok()).toBeTruthy();
@@ -28,11 +28,19 @@ test('solo players and one-player competing teams can start', async ({ browser }
     expect((await adminContext.request.post(`${base}/api/admin/session/${soloGame.id}`, { data: { action: 'start' } })).ok()).toBeTruthy();
     const soloPage = await soloContext.newPage();
     await soloPage.goto('/play');
+    await expect(soloPage.getByText(/one easy riddle/i)).toBeVisible();
     await soloPage.getByRole('button', { name: /accept mission/i }).click();
-    await expect(soloPage.locator('[aria-label="Your assigned puzzles"] button')).toHaveCount(5);
+    await expect(soloPage.getByText('riddle', { exact: true })).toBeVisible();
+    const soloState = await (await soloContext.request.get(`${base}/api/game/state`)).json();
+    expect(soloState.puzzles).toHaveLength(1);
+    const puzzleBank = await (await adminContext.request.get(`${base}/api/admin/puzzles`)).json();
+    const riddle = puzzleBank.puzzles.find((puzzle: { id: string }) => puzzle.id === soloState.puzzle.details.id);
+    const riddleAnswer = await soloContext.request.post(`${base}/api/puzzle/answer`, { data: { assignmentId: soloState.puzzle.id, answer: riddle.correct_answer } });
+    expect((await riddleAnswer.json()).correct).toBe(true);
+    await expect(soloPage.getByText(/FINAL SECRET WORD/)).toBeVisible();
 
     const versusResponse = await adminContext.request.post(`${base}/api/admin`, { data: {
-      name: `One Each QA ${Date.now()}`, theme: 'treasure', numberOfTeams: 2,
+      name: `One Each QA ${Date.now()}`, theme: 'zigzag', numberOfTeams: 2, playersPerTeam: 1,
       puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4
     } });
     expect(versusResponse.ok()).toBeTruthy();

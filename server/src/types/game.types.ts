@@ -1,6 +1,7 @@
 import type { PuzzleSeed } from '../../../src/lib/puzzle-seed';
 import type { PuzzleCategory } from '../../../src/lib/game-types';
 
+export type GameMode = 'solo' | 'multiplayer';
 export type SessionStatus = 'waiting_for_players' | 'ready' | 'running' | 'completed';
 export type TeamStatus = 'waiting' | 'active' | 'completed' | 'failed';
 export type GamePhase = 'waiting' | 'puzzles' | 'collaboration' | 'final_answer' | 'completed' | 'failed';
@@ -8,7 +9,7 @@ export type HelpStatus = 'requested' | 'accepted' | 'active' | 'completed' | 'ca
 
 export type Puzzle = PuzzleSeed & { id: string; active: boolean; created_at: string };
 export type GameSession = {
-  id: string; name: string; pin: string; theme: string; status: SessionStatus; team_count: number;
+  id: string; name: string; pin: string; theme: string; game_mode: GameMode; status: SessionStatus; team_count: number; players_per_team: number;
   puzzle_seconds: number; collaboration_seconds: number; final_seconds: number; hints_enabled: boolean;
   surprise_events: boolean; current_team_index: number; started_at: string | null; completed_at: string | null;
   paused_at: string | null; paused_seconds: number; remaining_time_before_pause: number | null; created_at: string;
@@ -43,7 +44,7 @@ export type TeamResult = {
 export type UploadedImage = { data: Buffer; mimeType: string };
 export type StoreOptions = { puzzles?: Puzzle[] };
 export type CreateGameInput = {
-  name: string; theme: string; numberOfTeams: number; puzzleMinutes: number; collaborationMinutes: number;
+  name: string; theme: string; gameMode?: GameMode; numberOfTeams: number; playersPerTeam?: number; puzzleMinutes: number; collaborationMinutes: number;
   finalMinutes: number; hintsEnabled?: boolean; surpriseEvents?: boolean;
 };
 export type PublicPuzzle = Pick<Puzzle, 'id' | 'title' | 'category' | 'difficulty' | 'question' | 'answer_type' | 'choices'> & { image_url: string | null };
