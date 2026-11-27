@@ -47,6 +47,6 @@ export type CreateGameInput = {
   name: string; theme: string; gameMode?: GameMode; numberOfTeams: number; playersPerTeam?: number; puzzleMinutes: number; collaborationMinutes: number;
   finalMinutes: number; hintsEnabled?: boolean; surpriseEvents?: boolean;
 };
-export type PublicPuzzle = Pick<Puzzle, 'id' | 'title' | 'category' | 'difficulty' | 'question' | 'answer_type' | 'choices'> & { image_url: string | null };
+export type PublicPuzzle = Pick<Puzzle, 'id' | 'category' | 'difficulty' | 'question' | 'answer_type' | 'choices'> & { image_url: string | null };
 export type PuzzleSeedDefinition = PuzzleSeed;
 export type { PuzzleCategory };

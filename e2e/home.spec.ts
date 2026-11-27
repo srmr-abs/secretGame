@@ -10,6 +10,14 @@ test('player landing page presents the join flow accessibly', async ({ page }) =
   await expect(page.getByRole('button', { name: /join game/i })).toBeEnabled();
 });
 
+test('pastes a formatted game PIN from the clipboard', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://localhost:3000' });
+  await page.goto('/');
+  await page.evaluate(() => navigator.clipboard.writeText('PIN: 012-345'));
+  await page.getByRole('button', { name: 'Paste PIN' }).click();
+  await expect(page.getByLabel('GAME PIN')).toHaveValue('012345');
+});
+
 test('admin sign-in view is accessible', async ({ page }) => {
   await page.goto('/admin/login');
   await expect(page.getByRole('heading', { name: /administrator sign in/i })).toBeVisible();

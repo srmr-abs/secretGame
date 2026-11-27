@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryStore } from '../storage/InMemoryStore';
 import { GameService } from './GameService';
+import { themeById } from '../../../src/lib/themes';
 
 let now: number;
 let game: GameService;
-function createOneTeam() {
-  const session = game.createSession({ name: 'Local QA', theme: 'detective', numberOfTeams: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
-  const joined = Array.from({ length: 5 }, (_, index) => game.join(session.pin, `Agent ${index + 1}`));
+function createOneTeam(playerCount = 5) {
+  const session = game.createSession({ name: 'Local QA', theme: 'detective', numberOfTeams: 1, playersPerTeam: playerCount, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+  const joined = Array.from({ length: playerCount }, (_, index) => game.join(session.pin, `Agent ${index + 1}`));
   return { ...session, players: joined.map((entry) => entry.player), team: joined[0].team };
 }
 function assignmentFor(playerId: string) {
@@ -57,29 +58,61 @@ describe('local room and puzzle behavior', () => {
     expect(game.data.sessions.get(session.id)?.status).toBe('completed');
   });
 
-  it('balances one player into each team and allows both teams to start', () => {
-    const session = game.createSession({ name: 'One each', theme: 'zigzag', numberOfTeams: 2, playersPerTeam: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
-    const first = game.join(session.pin, 'Team A player');
-    const second = game.join(session.pin, 'Team B player');
+  it('requires at least two players per multiplayer team before the session can start', () => {
+    expect(() => game.createSession({ name: 'Too small', theme: 'zigzag', numberOfTeams: 2, playersPerTeam: 1, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 })).toThrow(/between 2 and 10/i);
+    const session = game.createSession({ name: 'Two each', theme: 'zigzag', numberOfTeams: 2, playersPerTeam: 2, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+    const first = game.join(session.pin, 'Team A player one');
+    const second = game.join(session.pin, 'Team B player one');
     expect(first.team.id).not.toBe(second.team.id);
+    expect(game.data.sessions.get(session.id)?.status).toBe('waiting_for_players');
+    expect(() => game.startSession(session.id)).toThrow(/at least 2 players/i);
+    game.join(session.pin, 'Team A player two');
+    expect(game.data.sessions.get(session.id)?.status).toBe('waiting_for_players');
+    game.join(session.pin, 'Team B player two');
     expect(game.data.sessions.get(session.id)?.status).toBe('ready');
-    expect(() => game.join(session.pin, 'Unexpected third player')).toThrow(/1-player capacity/i);
+    expect(() => game.join(session.pin, 'Unexpected fifth player')).toThrow(/2-player capacity/i);
     game.startSession(session.id);
-    expect([...game.data.teams.values()].filter((team) => team.session_id === session.id).map((team) => team.status)).toEqual(['active', 'waiting']);
-    expect([...game.data.assignments.values()].filter((assignment) => assignment.team_id === first.team.id)).toHaveLength(5);
-    expect([...game.data.assignments.values()].filter((assignment) => assignment.team_id === second.team.id)).toHaveLength(5);
+    const teams = [...game.data.teams.values()].filter((team) => team.session_id === session.id);
+    expect(teams.map((team) => team.status)).toEqual(['active', 'waiting']);
+    expect(teams.map((team) => [...game.data.assignments.values()].filter((assignment) => assignment.team_id === team.id).length)).toEqual([2, 2]);
   });
 
-  it('assigns five distinct puzzle categories and never returns answer keys to player state', () => {
-    const room = createOneTeam();
-    game.startSession(room.id);
-    const assignments = [...game.data.assignments.values()].filter((entry) => entry.team_id === room.team.id);
-    const categories = assignments.map((assignment) => game.data.puzzles.get(assignment.puzzle_id)!.category);
-    expect(new Set(categories).size).toBe(5);
-    game.acceptMission(room.players[0].id);
-    const state = game.stateForPlayer(room.players[0].id);
-    expect(state.puzzle?.details).not.toHaveProperty('correct_answer');
-    expect(state.team.clues).toHaveLength(5);
+  it('assigns distinct puzzles and private clue fragments for two-, three-, and five-player teams', () => {
+    for (const playerCount of [2, 3, 5]) {
+      const sizedGame = new GameService(new InMemoryStore(), () => now);
+      const session = sizedGame.createSession({ name: `${playerCount}-player QA`, theme: 'detective', numberOfTeams: 1, playersPerTeam: playerCount, puzzleMinutes: 5, collaborationMinutes: 3, finalMinutes: 4 });
+      const players = Array.from({ length: playerCount }, (_, index) => sizedGame.join(session.pin, `Agent ${playerCount}-${index + 1}`).player);
+      const team = [...sizedGame.data.teams.values()][0];
+      sizedGame.startSession(session.id);
+      players.forEach((player) => sizedGame.acceptMission(player.id));
+
+      const assignments = [...sizedGame.data.assignments.values()].filter((entry) => entry.team_id === team.id).sort((a, b) => a.clue_number - b.clue_number);
+      expect(assignments).toHaveLength(playerCount);
+      expect(new Set(assignments.map((assignment) => assignment.player_id)).size).toBe(playerCount);
+      expect(new Set(assignments.map((assignment) => assignment.puzzle_id)).size).toBe(playerCount);
+      const mission = themeById('detective').words.find((entry) => entry.word === team.secret_word)!;
+      expect(assignments.map((assignment) => assignment.clue).join(' ')).toBe(mission.clues.logical);
+      expect(assignments.every((assignment) => assignment.clue !== mission.clues.logical)).toBe(true);
+      const firstAssignment = assignments.find((assignment) => assignment.player_id === players[0].id)!;
+      const firstPuzzle = sizedGame.data.puzzles.get(firstAssignment.puzzle_id)!;
+      sizedGame.submitPuzzleAnswer(players[0].id, firstAssignment.id, firstPuzzle.correct_answer);
+
+      const ownerState = sizedGame.stateForPlayer(players[0].id);
+      expect(ownerState.puzzles).toHaveLength(1);
+      expect(ownerState.puzzle?.details).not.toHaveProperty('correct_answer');
+      expect(ownerState.puzzle?.details).not.toHaveProperty('title');
+      expect(ownerState.team.clues).toHaveLength(playerCount);
+      expect(ownerState.team.clues.find((clue: { playerId: string }) => clue.playerId === players[0].id)?.clue).toBe(assignments.find((assignment) => assignment.player_id === players[0].id)?.clue);
+      expect(ownerState.team.clues.filter((clue: { playerId: string }) => clue.playerId !== players[0].id).every((clue: { clue: string | null }) => clue.clue === null)).toBe(true);
+      expect(() => sizedGame.submitFinalAnswer(players[0].id, team.secret_word)).toThrow(/not currently available/i);
+      for (const player of players.slice(1)) {
+        const assignment = assignments.find((entry) => entry.player_id === player.id)!;
+        const puzzle = sizedGame.data.puzzles.get(assignment.puzzle_id)!;
+        sizedGame.submitPuzzleAnswer(player.id, assignment.id, puzzle.correct_answer);
+      }
+      expect(team.phase).toBe('collaboration');
+      expect(sizedGame.submitFinalAnswer(players[0].id, team.secret_word).correct).toBe(true);
+    }
   });
 });
 
@@ -98,6 +131,7 @@ describe('assistance authorization and lifecycle', () => {
     const privateSession = helperState.helpSessions.find((entry) => entry.id === created.id);
     expect(privateSession?.puzzle?.question).toBe(game.data.puzzles.get(ownerAssignment.puzzle_id)?.question);
     expect(privateSession?.puzzle).not.toHaveProperty('correct_answer');
+    expect(privateSession?.puzzle).not.toHaveProperty('title');
     expect(helperState.puzzle?.id).toBe(helperAssignment.id);
     expect(helperState.puzzle?.completed).toBe(false);
     expect(() => game.submitPuzzleAnswer(helper.id, ownerAssignment.id, 'answer')).toThrow(/only the puzzle owner/i);

@@ -17,8 +17,32 @@ export class HttpError extends Error {
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 const iso = (time = Date.now()) => new Date(time).toISOString();
 const shuffle = <T,>(values: T[]) => [...values].sort(() => Math.random() - 0.5);
+function splitClueIntoFragments(clue: string, count: number) {
+  const words = clue.match(/\S+\s*/gu) ?? [clue];
+  if (count <= words.length) {
+    const baseSize = Math.floor(words.length / count);
+    const extra = words.length % count;
+    let offset = 0;
+    return Array.from({ length: count }, (_, index) => {
+      const size = baseSize + (index < extra ? 1 : 0);
+      const fragment = words.slice(offset, offset + size).join('').trim();
+      offset += size;
+      return fragment;
+    });
+  }
+  const characters = [...clue];
+  const baseSize = Math.floor(characters.length / count);
+  const extra = characters.length % count;
+  let offset = 0;
+  return Array.from({ length: count }, (_, index) => {
+    const size = baseSize + (index < extra ? 1 : 0);
+    const fragment = characters.slice(offset, offset + size).join('').trim();
+    offset += size;
+    return fragment;
+  });
+}
 const safePuzzle = (puzzle: Puzzle): PublicPuzzle => ({
-  id: puzzle.id, title: puzzle.title, category: puzzle.category, difficulty: puzzle.difficulty,
+  id: puzzle.id, category: puzzle.category, difficulty: puzzle.difficulty,
   question: puzzle.question, image_url: puzzle.image_url ? puzzle.image_url : null,
   answer_type: puzzle.answer_type, choices: puzzle.choices ?? undefined
 });
@@ -57,7 +81,7 @@ export class GameService {
     const numberOfTeams = gameMode === 'solo' ? 1 : input.numberOfTeams;
     if (!Number.isInteger(numberOfTeams) || numberOfTeams < 1 || numberOfTeams > 20) throw new HttpError(400, 'Choose between 1 and 20 teams.');
     const playersPerTeam = gameMode === 'solo' ? 1 : input.playersPerTeam ?? 10;
-    if (!Number.isInteger(playersPerTeam) || playersPerTeam < 1 || playersPerTeam > 10) throw new HttpError(400, 'Each team capacity must be between 1 and 10 players.');
+    if (!Number.isInteger(playersPerTeam) || playersPerTeam < (gameMode === 'solo' ? 1 : 2) || playersPerTeam > 10) throw new HttpError(400, gameMode === 'solo' ? 'Solo mode has one player.' : 'Each multiplayer team must allow between 2 and 10 players.');
     const durations = [input.puzzleMinutes, input.collaborationMinutes, input.finalMinutes];
     if (!durations.every((duration) => Number.isInteger(duration) && duration >= 1 && duration <= 30)) throw new HttpError(400, 'Each phase timer must be from 1 to 30 minutes.');
     const theme = themeById(input.theme);
@@ -104,7 +128,8 @@ export class GameService {
     };
     this.data.players.set(player.id, player);
     this.data.playerTokens.set(player.token_hash, player.id);
-    session.status = teams.every((candidate) => this.countTeamPlayers(candidate.id) >= 1) ? 'ready' : 'waiting_for_players';
+    const minimumPlayers = session.game_mode === 'solo' ? 1 : 2;
+    session.status = teams.every((candidate) => this.countTeamPlayers(candidate.id) >= minimumPlayers) ? 'ready' : 'waiting_for_players';
     this.event(session.id, team.id, player.id, 'player_joined');
     this.notify(team.id, 'player-joined');
     return { token, player, team };
@@ -143,23 +168,26 @@ export class GameService {
     const players = this.teamPlayers(teamId);
     if (players.length < 1 || players.length > 10) return false;
     const session = this.sessionForTeam(team);
-    const categories = session?.game_mode === 'solo' ? ['riddle'] as const : shuffle([...puzzleCategories]);
-    const expectedAssignments = categories.length;
+    const solo = session?.game_mode === 'solo';
+    const expectedAssignments = solo ? 1 : players.length;
     const existing = this.teamAssignments(teamId);
     if (existing.length === expectedAssignments) return true;
     for (const assignment of existing) this.data.assignments.delete(assignment.id);
     const theme = themeById(session?.theme ?? 'detective');
     const mission = theme.words.find((entry) => entry.word === team.secret_word);
     if (!mission) throw new HttpError(500, 'The selected theme is missing its clue set.');
+    const categories = solo ? ['riddle'] : shuffle([...puzzleCategories]);
+    const fragments = solo ? [mission.clues.riddle] : splitClueIntoFragments(mission.clues.logical, players.length);
     const assignedIds = new Set<string>();
-    for (const [index, category] of categories.entries()) {
+    for (const [index, player] of players.entries()) {
+      const category = categories[index % categories.length];
       const pool = shuffle([...this.data.puzzles.values()].filter((puzzle) => puzzle.active && puzzle.category === category && !assignedIds.has(puzzle.id)));
       if (!pool.length) throw new HttpError(500, `No active ${category} puzzles are available.`);
       const puzzle = pool[0];
       assignedIds.add(puzzle.id);
       const assignment: PuzzleAssignment = {
-        id: randomUUID(), team_id: team.id, player_id: players[index % players.length].id, puzzle_id: puzzle.id,
-        clue_number: index + 1, clue: mission.clues[category], completed_at: null, hints_used: 0, attempts: []
+        id: randomUUID(), team_id: team.id, player_id: player.id, puzzle_id: puzzle.id,
+        clue_number: index + 1, clue: fragments[index], completed_at: null, hints_used: 0, attempts: []
       };
       this.data.assignments.set(assignment.id, assignment);
     }
@@ -170,10 +198,10 @@ export class GameService {
     const session = this.data.sessions.get(sessionId);
     if (!session || !['ready', 'waiting_for_players'].includes(session.status)) throw new HttpError(409, 'Session cannot be started.');
     const teams = [...this.data.teams.values()].filter((team) => team.session_id === session.id).sort((a, b) => a.play_order - b.play_order);
-    if (teams.length !== session.team_count || teams.some((team) => this.countTeamPlayers(team.id) < 1 || this.countTeamPlayers(team.id) > session.players_per_team)) throw new HttpError(409, `Every team needs at least one player and can have no more than ${session.players_per_team}.`);
+    const minimumPlayers = session.game_mode === 'solo' ? 1 : 2;
+    if (teams.length !== session.team_count || teams.some((team) => this.countTeamPlayers(team.id) < minimumPlayers || this.countTeamPlayers(team.id) > session.players_per_team)) throw new HttpError(409, `Every team needs at least ${minimumPlayers} player${minimumPlayers === 1 ? '' : 's'} and can have no more than ${session.players_per_team}.`);
     for (const team of teams) this.assignPuzzles(team.id);
-    const expectedAssignments = session.game_mode === 'solo' ? 1 : 5;
-    if (teams.some((team) => this.teamAssignments(team.id).length !== expectedAssignments)) throw new HttpError(409, 'Puzzle assignments are not ready.');
+    if (teams.some((team) => this.teamAssignments(team.id).length !== (session.game_mode === 'solo' ? 1 : this.countTeamPlayers(team.id)))) throw new HttpError(409, 'Puzzle assignments are not ready.');
     const now = this.now();
     session.status = 'running';
     session.started_at = iso(now);
@@ -280,7 +308,7 @@ export class GameService {
     const team = this.requireTeam(player.team_id);
     const session = this.sessionForTeam(team);
     if (!player.mission_accepted_at || !session || team.status !== 'active' || !['collaboration', 'final_answer'].includes(team.phase) || session.status !== 'running' || session.paused_at || !team.phase_ends_at || Date.parse(team.phase_ends_at) <= this.now()) throw new HttpError(409, 'The final answer is not currently available.');
-    const requiredClues = session.game_mode === 'solo' ? 1 : 5;
+    const requiredClues = session.game_mode === 'solo' ? 1 : this.countTeamPlayers(team.id);
     if (this.teamAssignments(team.id).filter((assignment) => assignment.completed_at).length !== requiredClues) throw new HttpError(409, `Unlock all ${requiredClues} clue${requiredClues === 1 ? '' : 's'} first.`);
     if (team.incorrect_final_attempts >= 3) throw new HttpError(409, 'No final answer attempts remain.');
     team.final_attempts += 1;
@@ -425,7 +453,8 @@ export class GameService {
       return {
         clueNumber: assignment.clue_number, playerId: assignment.player_id, playerName: owner?.display_name ?? 'Player',
         category: puzzle?.category, completed: Boolean(assignment.completed_at),
-        clue: assignment.completed_at ? assignment.clue : null, completedAt: assignment.completed_at
+        clue: assignment.completed_at && (session.game_mode === 'solo' || assignment.player_id === player.id || team.status !== 'active') ? assignment.clue : null,
+        completedAt: assignment.completed_at
       };
     });
     const ownAssignments = assignments.filter((assignment) => assignment.player_id === player.id);
@@ -605,7 +634,8 @@ export class GameService {
       for (const team of [source, target]) for (const assignment of this.teamAssignments(team.id)) this.data.assignments.delete(assignment.id);
       player.team_id = target.id; source.status = 'waiting'; target.status = 'waiting';
       this.assignPuzzles(source.id); this.assignPuzzles(target.id);
-      session.status = [...this.data.teams.values()].filter((team) => team.session_id === session.id).every((team) => this.countTeamPlayers(team.id) >= 1) ? 'ready' : 'waiting_for_players';
+      const minimumPlayers = session.game_mode === 'solo' ? 1 : 2;
+      session.status = [...this.data.teams.values()].filter((team) => team.session_id === session.id).every((team) => this.countTeamPlayers(team.id) >= minimumPlayers) ? 'ready' : 'waiting_for_players';
       this.notify(source.id, 'player-reassigned'); this.notify(target.id, 'player-reassigned'); return { ok: true, playerId: player.id, sourceTeamId: source.id, targetTeamId: target.id };
     }
     throw new HttpError(400, 'Unknown action.');
@@ -684,7 +714,7 @@ export class GameService {
     const now = this.now();
     if (team.phase === 'completed' || team.phase === 'failed') { this.finishTeam(team); return; }
     if (team.phase === 'puzzles') {
-      const puzzleCount = session.game_mode === 'solo' ? 1 : 5;
+      const puzzleCount = session.game_mode === 'solo' ? 1 : this.countTeamPlayers(team.id);
       if (this.teamAssignments(team.id).length === puzzleCount && this.teamAssignments(team.id).every((assignment) => assignment.completed_at)) {
         const nextPhase = session.game_mode === 'solo' ? 'final_answer' : 'collaboration';
         const nextDuration = session.game_mode === 'solo' ? session.final_seconds : session.collaboration_seconds;

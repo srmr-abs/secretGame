@@ -1,6 +1,6 @@
 # The Great Secret Unlock
 
-**5 Players. 5 Puzzles. 5 Clues. 1 Secret Word. One Team!**
+**Each Player. One Puzzle. One Clue Fragment. One Team Secret.**
 
 A local multiplayer mystery-game proof of concept. The existing Next.js and React application is preserved; its Supabase database, authentication, storage, and Realtime dependencies have been replaced by a local Express and Socket.IO backend with process-local in-memory state.
 
@@ -13,8 +13,8 @@ A local multiplayer mystery-game proof of concept. The existing Next.js and Reac
 | Bundled 55-puzzle bank | Retained and rewritten at easy difficulty across all five categories |
 | Supabase clients, queries, authentication, Realtime, packages, migrations, and cloud deployment config | Removed |
 | Local Express API and Socket.IO server | Implemented on port 4000 |
-| Rooms, PIN joining, player sessions, answers, clues, chat, results, and sequential teams | Implemented in memory; teams can start at 1 player and hold up to 10 |
-| Solo and multiplayer modes | Solo players receive one easy riddle; multiplayer teams share five category puzzles and may have 1–10 players |
+| Rooms, PIN joining, player sessions, answers, clues, chat, results, and sequential teams | Implemented in memory; multiplayer teams require at least 2 players and support up to 10 |
+| Solo and multiplayer modes | Solo players receive one easy riddle; multiplayer teams receive one unique puzzle per joined player (1–10) and private, ordered clue fragments that must be combined |
 | Two-helper assistance, private help-session state, visual puzzle authorization, and owner-only answers | Implemented |
 | Server-owned phase timers and admin pause/resume | Implemented |
 | Local admin password-hash login and signed session cookie | Implemented |
@@ -76,13 +76,13 @@ npm run dev:client
 ## Admin and multiplayer demonstration
 
 1. Sign in at `/admin/login` with the `ADMIN_EMAIL` and the original password used to generate `ADMIN_PASSWORD_HASH`.
-2. Create a game, choose Detective Case or Zigzag Puzzle Hunt, then choose Single Player or Multiplayer. Solo mode creates one player and one easy riddle. Multiplayer lets you set team count and capacity from 1 to 10; each team can start with one player. For one player on each side, choose two teams with capacity one. Multiplayer phase defaults are five, three, and four minutes.
-3. Share the six-digit PIN. Open the frontend in separate tabs, incognito windows, or browser profiles and join with distinct display names. Players are balanced across the configured teams, and the host can start as soon as every team has at least one player.
-4. Start the session once. Multiplayer teams activate in sequence and receive five distinct category puzzles, distributed across their players. In Solo mode, the player gets one easy riddle and one clue, then proceeds directly to the final secret word.
+2. Create a game, choose Detective Case or Zigzag Puzzle Hunt, then choose Single Player or Multiplayer. Solo mode creates one player and one easy riddle. Multiplayer lets you set team count and a capacity of 2 to 10 players per team; every team needs at least two joined players before the host can start. Multiplayer phase defaults are five, three, and four minutes.
+3. Share the six-digit PIN. Each player must join from a separate browser profile or device and use a distinct display name. Tabs and windows in the same browser profile share one player cookie, so joining a second player there replaces the first player's session. Players are balanced across the configured teams, and the host can start once every multiplayer team has at least two players.
+4. Start the session once. Multiplayer teams activate in sequence. Each joined player receives one unique puzzle and one private fragment of the team's final clue; clue fragments are split into the same number as players. In Solo mode, the player gets one easy riddle and one complete clue, then proceeds directly to the final secret word.
 5. Players submit their own answers, share clues and team-chat messages, and may request help. Any connected teammate can accept while working on their own puzzle. The accepted helper receives the question and, for visual puzzles, the original authorized image in a separate help panel.
-6. Solo mode opens the final answer after its one clue is unlocked. Multiplayer opens it as soon as all five clues are unlocked, during the collaboration phase. Results record completion, raw and adjusted times, penalties, hints, incorrect final attempts, and assistance statistics.
+6. Solo mode opens the final answer after its clue is unlocked. Multiplayer opens the final answer after every player has solved their puzzle; each player can see their own fragment while teammates see its unlocked status, so they must share and combine the fragments. Results record completion, raw and adjusted times, penalties, hints, incorrect final attempts, and assistance statistics.
 
-Use the admin control room for live team/player status, team order, pause/resume, and results. The game supports multiple browser sessions on one development machine.
+Use the admin control room for live team/player status, team order, pause/resume, and results. The game supports multiple browser profiles on one development machine; use separate profiles rather than separate tabs, since tabs share player authentication cookies.
 
 ## Authentication and local configuration
 
@@ -100,8 +100,8 @@ Admin credentials are verified on the backend. Admin and player sessions use Htt
 
 ## Game rules and timers
 
-- Multiplayer individual puzzles: five minutes by default.
-- Multiplayer collaboration: three minutes by default.
+- Multiplayer individual puzzles: five minutes by default. Every player must solve their own assigned puzzle.
+- Multiplayer collaboration: three minutes by default. Players share their private clue fragments and combine them to infer the secret word.
 - Final secret-word phase: four minutes by default. Solo mode skips team collaboration and proceeds directly from its riddle to the final answer. The final-answer form appears as soon as all required clues are unlocked, even while the multiplayer collaboration timer is still running.
 - Puzzle hints add fifteen seconds each; an incorrect final answer adds ten seconds; assistance adds zero seconds.
 - A maximum of three incorrect final answers is allowed.
@@ -118,7 +118,7 @@ npm run build
 npm run test:e2e
 ```
 
-The public landing/admin-entry browser tests run without admin credentials. Solo/team-sizing and full five-player browser tests are skipped unless `E2E_ADMIN_EMAIL` and `E2E_ADMIN_PASSWORD` are set in the test process and match the locally configured administrator. For example, export those two values in the shell before `npm run test:e2e`; do not put the password in committed files. Playwright requires a Chromium browser; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` if using a system-installed browser.
+The public landing/admin-entry browser tests run without admin credentials. Solo/team-sizing and multiplayer browser tests are skipped unless `E2E_ADMIN_EMAIL` and `E2E_ADMIN_PASSWORD` are set in the test process and match the locally configured administrator. For example, export those two values in the shell before `npm run test:e2e`; do not put the password in committed files. Playwright requires a Chromium browser; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` if using a system-installed browser.
 
 ## Known limitations
 
